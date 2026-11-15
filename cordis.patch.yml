@@ -1,0 +1,27 @@
+# dsh-whale-glance bundle patch：把陪看插件和它专用的精简预设一起插进 profile。
+# 注意：preset-peek 必须随插件走——代码里写死 agentPreset: 'peek'，
+# 要是用户 profile 里没有这个预设，陪看会退回默认预设（带工具+技能+上下文），
+# 一次唤醒多烧十几倍的钱。所以这里不靠用户手配，装插件就自动注册。
+# 插件本体必须在这里 insert——bundles 列表只声明「加载这个 bundle」，
+# 真正把 host 插件和预设插进 profile 的是这份 patch。少了 whale-glance 这条，
+# 插件根本不会加载。之前那个 duplicate registration，是同一个包被两份 patch 各 insert 一次
+# （旧 dsh-whale-sense 和 dsh-whale-glance 同时在场），不是这条的锅。
+- insert:
+    - id: whale-glance
+      name: 'dsh-whale-glance'
+    - id: preset-peek
+      name: '@deepseek-ai/dsh-agent-preset'
+      config:
+        id: peek
+        name: 陪看
+        description: whale-glance 陪看子代理专用精简预设：只看图说一句，无工具、无技能、无运行时上下文，省 token。
+        order: 90
+        plugins:
+          - id: persona
+            name: '@deepseek-ai/dsh-persona'
+            config:
+              prefix: |-
+                你是一个陪看助手，只做一件事：看一张屏幕截图，说一句有用的判断或提醒。
+                短句，一句到两句就够，别长篇，别解释自己。
+              complete: true
+              includeRuntimeContext: false

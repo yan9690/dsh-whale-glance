@@ -1,0 +1,28 @@
+*.tgz
+.tokens.json
+submission/put.json
+
+# 运行时 / 生成垃圾
+__pycache__/
+*.pyc
+.helper.lock
+*.log
+
+# 备份和临时文件（手动 cp 出来的 .bak）
+*.bak
+*.bak.py
+*.bak-*
+_bak-*
+
+# 本地环境
+.venv/
+venv/
+node_modules/
+
+
+# 运行时状态（不进仓库）
+helper/game-state.json
+LOCAL-NOTES.md
+cordis.patch.yml.disabled-*
+helper/game_probe.py
+dwm_test.py

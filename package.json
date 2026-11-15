@@ -1,0 +1,51 @@
+{
+  "name": "dsh-whale-glance",
+  "version": "1.0.1",
+  "description": "让鲸鱼娘看着你的屏幕陪你玩：检测画面变化，自动看一眼、说一句，字幕挂在屏幕底部。",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "companion",
+    "screen",
+    "watch",
+    "subtitles",
+    "windows"
+  ],
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib/index.js",
+    "lib/client.js",
+    "helper/sense.py",
+    "helper/learn_text.py",
+    "helper/hud_window.py",
+    "helper/danmaku.py",
+    "helper/games-all.json",
+    "helper/games-notes.json",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE",
+    "CREDITS.md"
+  ],
+  "license": "MIT",
+  "author": "yan9690",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yan9690/dsh-whale-glance.git"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web"
+    }
+  }
+}

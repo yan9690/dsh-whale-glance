@@ -1,0 +1,33 @@
+# NOTICE
+
+本插件（余光 / dsh-whale-glance）包含以下第三方代码与素材，按各自许可保留署名。
+
+## fork 源
+
+本插件 fork 自 [pairun325/dsh-whale-sense](https://github.com/pairun325/dsh-whale-sense)
+（MIT，Copyright 2026 dsh-tentacle contributors）。最初的游戏识别、字幕窗、弹幕那套
+来自它，之后在本项目上改名、大改。原作者署名保留。
+
+## 抓屏与判分逻辑
+
+移植自 [dsh-see-now](https://github.com/SAOS-3624/dsh-see-now)（Apache-2.0），
+抓屏、变化判分、拼图的基本思路来自它。作者：SAOS-3624。
+
+Apache-2.0 要求保留本 NOTICE；MIT 部分见 LICENSE。移植时按本项目需要做了改写，
+但源头思路的署名不删。
+
+## B 站登录
+
+接口调用顺序、cookie 字段解析，参照 [dsh-bili-subagent](https://github.com/Yuuyuko-uu)
+（MIT，作者 Yuuyuko-uu）的 `lib/login.mjs`。
+
+## 小黑盒登录
+
+请求签名算法（`ov` / `generateSignature` 及配套变换）参照
+[dsh-xiaoheihe](https://github.com/fbbDirge/dsh-xiaoheihe)（MIT，作者 fbbDirge）的 `lib/index.js`，
+登录流程参照它的 `lib/login.js`。
+
+## 美术素材
+
+鲸鱼娘头像等第三方美术素材的来源链与许可见 `CREDITS.md`，是社区二创、非商业用途，
+商用需另行授权。
