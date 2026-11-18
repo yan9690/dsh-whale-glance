@@ -10,6 +10,7 @@ import json
 import os
 import random
 import sys
+import time
 import tkinter as tk
 import tkinter.font as tkfont
 
@@ -120,6 +121,9 @@ def main():
 
     cv = tk.Canvas(root, bg=KEY, highlightthickness=0, bd=0)
     cv.pack(fill="both", expand=True)
+    # 待喷的句子队列。一次只放一条，跟朗读节奏走，不要一口气全吐。
+    pending = []
+    next_spawn_at = 0.0
     style = {
         "family": str(cfg.get("danmakuFontFamily") or DEFAULTS["danmakuFontFamily"]),
         "size": int(cfg.get("danmakuFontSize") or DEFAULTS["danmakuFontSize"]),
@@ -169,8 +173,10 @@ def main():
             if right < sw - 60:
                 w = tkfont.Font(family=family, size=size, weight="bold").measure(text)
                 x0 = sw + w // 2
-                # y 在整块弹幕区里随机，且避开正在飘的——连续几句挤同一行会叠起来
-                y0 = pick_y(size)
+                # y 用这一条轨道自己的位置，不要再随机。
+                # 以前 busy[i] 判断「第 i 条道空了」，y 却另去 pick_y 随机取，
+                # 结果是这条道明明空着，弹幕却飘到别人道上，几条叠在一起。
+                y0 = lanes[i]
                 # 黑字垫偏 2px 当描边，主字压上面——背景再花也认得出
                 # 描边四方向各一层（各偏 1px），不会显得整句往一边偏
                 offs = ((-1, 0), (1, 0), (0, -1), (0, 1))
@@ -226,16 +232,23 @@ def main():
 
         lines = read_hud()
         if lines:
-            # 喷**所有**没见过的行，不只最后一行——字幕文件里存着最近几句，
-            # 只取最后一行的话，前面那几句永远飘不出来，看着就是「弹幕不全」。
+            # 新出现的行先进队列，不要一次全喷出去。
+            # 以前是 fresh 里四条一起 spawn，看着像一口气吐完，跟念出来的节奏对不上。
             fresh = [ln.strip() for ln in lines if ln.strip() and ln.strip() not in seen]
             for text in fresh[:4]:
                 seen.add(text)
-                spawn(text)
+                pending.append(text)
             # 已经飘过的也记进 seen，免得下次重复
             for ln in lines:
                 if ln.strip():
                     seen.add(ln.strip())
+
+        # 一次只放一条；上一条按字数估一个朗读时长，够长了再放下一条。
+        now = time.time()
+        if pending and now >= next_spawn_at:
+            text = pending.pop(0)
+            spawn(text)
+            next_spawn_at = now + max(1.6, min(7.0, len(text) * 0.22))
         root.after(TICK_MS, tick)
 
     # 开弹幕就先飘一条测试，不用等真的说话才知道效果
