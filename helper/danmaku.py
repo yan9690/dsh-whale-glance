@@ -144,12 +144,12 @@ def main():
     busy = [0.0] * len(lanes)
     items = []   # [canvas_id, x, y, width, lane_index]
     seen = set()
-    # 启动时先把字幕里现成的那句记下来，别一开就把它飘一遍
-    _first = read_hud()
-    if _first:
-        _last = _first[-1].strip()
-        if _last:
-            seen.add(_last)
+    # 启动时把字幕里现成的**全部**记下来，别一开就把上一轮的话重飘一遍。
+    # 以前只记最后一句，前面几行全被当成新的，开一次就倒放三四句旧台词。
+    for _ln in read_hud() or []:
+        _t = _ln.strip()
+        if _t:
+            seen.add(_t)
     cfg_mtime = [0.0]
 
     def pick_y(size):
@@ -193,6 +193,11 @@ def main():
                 return
 
     def tick():
+        # next_spawn_at 定义在 main() 里，这里要重新赋值，必须声明 nonlocal。
+        # 漏了这一行，Python 会把它当成 tick 自己的局部变量，第一次读到就抛
+        # UnboundLocalError；而 main() 是直接调 tick() 的，异常直接把进程干掉——
+        # 表现就是「窗口开了、飘一句测试字、一有真字幕就没了」。
+        nonlocal next_spawn_at
         # config 变了就重读（字号/字体/位置/速度实时生效）
         try:
             mt = os.path.getmtime(CONFIG) if CONFIG else 0.0
