@@ -90,9 +90,9 @@ try {
   const state = await tools.get('sense_state').execute({}, {});
   check('自动陪看默认关', state.config.auto === false);
 
-  const config = await tools.get('sense_config').execute({ intervalMs: 999999, threshold: 0.2 }, {});
+  const config = await tools.get('sense_config').execute({ intervalMs: 999999 }, {});
   check('采样被夹紧', config.config.intervalMs === 60000, JSON.stringify(config.config));
-  check('写着盘上', JSON.parse(fs.readFileSync(path.join(tempHome, 'storages', 'whale-glance', 'config.json'), 'utf8')).threshold === 0.2);
+  check('写着盘上', JSON.parse(fs.readFileSync(path.join(tempHome, 'storages', 'whale-glance', 'config.json'), 'utf8')).intervalMs === 60000);
 
   const snap = await tools.get('sense_snap').execute({}, {});
   check('截到图', typeof snap.path === 'string' && fs.existsSync(snap.path), snap.path);

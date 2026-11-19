@@ -3,14 +3,14 @@
 """dsh-whale-glance helper —— 陪看的眼睛（拼图版）。
 
 每隔 interval 抓一张屏，在 64×36 的网格上算 HSV 变化分；够分的帧先留着，
-冷却到期时把攒下的帧拼成一张图交出去（宽度跟档位走），一张图的 token 摊到多帧画面上，
+冷却到期时把攒下的帧拼成一张图交出去（宽度按屏幕比例走），一张图的 token 摊到多帧画面上，
 静止的屏幕几乎不出图。
 
 `snap` 走另一条路：原始分辨率的全屏单帧。拼图里格子太小、看不清字的时候用这个。
 
 stdin 每行一个 JSON 命令：
   {"op": "snap"}                                    立刻截一张全屏原图
-  {"op": "config", "intervalMs": 2000, "threshold": 0.06, "cooldownMs": 45000, "maxWidth": 1280}
+  {"op": "config", "intervalMs": 2000, "cooldownMs": 45000}
   {"op": "quit"}
 
 stdout 每行一个 JSON：
@@ -57,18 +57,18 @@ except Exception:
 
 user32 = ctypes.windll.user32
 
-# 三个模式（追剧 / 打游戏 / 随便看）× 三档（节约 / 平衡 / 极致）。
-# 档位是预设包：选中就整套换掉 intervalMs / floorSec / 出图形式 / 单张宽度比例。
+# 两个模式（追剧 / 打游戏）× 三档（节约 / 平衡 / 极致）。
+# 档位是预设包：选中就整套换掉 intervalMs / floorSec。
 PROFILES = {
     "video": {
-        "save":    {"intervalMs": 2500, "floorSec": 90.0, "sheetMode": "sheet", "singleRatio": 0.0,  "sheetW": 798,  "spanSec": 6, "maxFrames": 4},
-        "balance": {"intervalMs": 2500, "floorSec": 60.0, "sheetMode": "both",  "singleRatio": 0.66, "sheetW": 1050, "spanSec": 8, "maxFrames": 6},
-        "extreme": {"intervalMs": 2000, "floorSec": 45.0, "sheetMode": "both",  "singleRatio": 0.83, "sheetW": 1260, "spanSec": 10, "maxFrames": 9},
+        "save":    {"intervalMs": 2500, "floorSec": 90.0, "spanSec": 6},
+        "balance": {"intervalMs": 2500, "floorSec": 60.0, "spanSec": 8},
+        "extreme": {"intervalMs": 2000, "floorSec": 45.0, "spanSec": 10},
     },
     "game": {
-        "save":    {"intervalMs": 1500, "floorSec": 90.0, "sheetMode": "sheet", "singleRatio": 0.0,  "sheetW": 798,  "spanSec": 6, "maxFrames": 4},
-        "balance": {"intervalMs": 1000, "floorSec": 60.0, "sheetMode": "both",  "singleRatio": 0.66, "sheetW": 1050, "spanSec": 8, "maxFrames": 6},
-        "extreme": {"intervalMs": 1000, "floorSec": 45.0, "sheetMode": "both",  "singleRatio": 0.83, "sheetW": 1260, "spanSec": 10, "maxFrames": 9},
+        "save":    {"intervalMs": 1500, "floorSec": 90.0, "spanSec": 6},
+        "balance": {"intervalMs": 1000, "floorSec": 60.0, "spanSec": 8},
+        "extreme": {"intervalMs": 1000, "floorSec": 45.0, "spanSec": 10},
     },
 }
 TIERS = ("save", "balance", "extreme")
@@ -82,9 +82,7 @@ STATE = {
     "windowOnly": False,
     "hudCapturable": False,   # 字幕窗能不能被截屏拍到（玻璃档=True）
     "intervalMs": 2500,
-    "threshold": 0.07,
     "cooldownMs": 45000,
-    "maxWidth": 1280,
     "floorSec": 60.0,
     "silentMax": 300.0,     # 画面一直没变时，最多沉默这么久也看一眼
     "pace": "",             # 认出前台游戏的节奏：fast 快 / slow 慢 / "" 没认出
@@ -92,7 +90,6 @@ STATE = {
     "_lastTitle": "",       # 上次的前台标题，变了才重新认
     "singleEverySec": 180.0,   # 全屏图多久才给一张（拼图不受这个管，它便宜）
     "tier": {"video": "balance", "game": "balance"},
-    "sheetMode": {"video": "", "game": ""},   # "" = 跟随档位默认
     "motion": 0.0,          # 最近几帧差分的平均，主循环每轮更新
     "stillSec": 0.0,        # 连续静止了几秒
     "jumped": False,        # 最近一次静止归零是不是「断崖」（打开面板）导致的
@@ -125,10 +122,9 @@ def claim_single_instance():
 
 
 GRID = (64, 36)
-MAX_FRAMES = 4             # 兜底帧数（档位没配 maxFrames 时用）
+MAX_FRAMES = 4             # 翻最近帧时最多拼这么多格
 BUFFER_CAP = 20            # 短历史留二十帧：动满要拼 16 格，得留够 + 余量
 RECENT_FRAMES = 24         # 「看这一段」的滚动缓冲（只存缩略图，约 24MB）
-MIN_CUT = 0.04             # 绝对地板：太灵敏会把光标抖动当变化
 GUTTER = 2
 
 # ---- 采样节奏自适应 ----
@@ -1551,20 +1547,6 @@ def screen_width():
         return 1920
 
 
-def single_target_width():
-    """单张 / 字幕条的宽度。
-
-    PROFILES 里存的是「占屏幕宽度的比例」，不是死数字——1080p 上
-    0.66 约 1270、0.83 约 1590；换 4K 或 1366 的屏幕按同样比例缩，
-    再夹在 900–1700 之间（再宽就只是白烧 token）。
-    """
-    ratio = float(current_profile().get("singleRatio") or 0.0)
-    if ratio <= 0:
-        return int(STATE["maxWidth"])
-    raw = int(screen_width() * ratio)
-    return max(900, min(1700, int(round(raw / 100.0)) * 100))
-
-
 def adaptive_wait(base):
     """下一次抓图等多久——连续曲线，不是档位跳变。
 
@@ -1643,7 +1625,7 @@ def subtitle_sheet(frames=None, width=None, max_lines=5):
 
 def save_full(image):
     # 读字高清：上限 1920。小屏（1366 等）不放大，原样存；4K 缩到 1920 够读字，
-    # 再大只是白烧 token。这样跨分辨率都自适应，不用人调 maxWidth。
+    # 再大只是白烧 token。这样跨分辨率都自适应，不用人再调宽度。
     if image.width > READING_WIDTH:
         image = resize_width(image, READING_WIDTH)
     os.makedirs(OUT_DIR, exist_ok=True)
@@ -1707,15 +1689,10 @@ def sheet_height():
 
 
 def apply_preset():
-    """切模式/档位时把预设参数套进去。图形式的覆盖单独存，不在这里动。"""
+    """切模式/档位时把预设参数套进去。"""
     preset = current_profile()
     STATE["intervalMs"] = int(preset["intervalMs"])
     STATE["floorSec"] = float(preset["floorSec"])
-
-
-def effective_sheet_mode():
-    """出图形式一律跟档位走：这不是用户选项，面板上早删了。"""
-    return current_profile()["sheetMode"]
 
 
 SHEET_MIN_DIFF = 0.025   # 首尾差异低于这个，等于花四倍面积看同一张，退回单格
@@ -1914,11 +1891,9 @@ def render_outputs(frames, full):
     """按当前状态产出图，返回 [(kind, path)]。互斥——每次最多一张。
 
     视频 -> 只发字幕条；静止读字 -> OCR 出文字 + 小图（省 token）；
-    画面在动 -> 拼图看过程（出图形式选了 single/both 时再按节流补一张单张）。
+    画面在动 -> 拼图看过程。
     """
     mode = STATE["mode"]
-    shape = effective_sheet_mode()
-    width = single_target_width()
     reading = still_reading()
     out = []
     OCR_TEXT[0] = ""  # 默认清空，只有读字分支才填
@@ -2050,7 +2025,6 @@ def emit_change(frames, now, full=None):
         "waitSec": round(now - base, 1),
         "mode": mode,
         "tier": STATE["tier"].get(mode, "balance"),
-        "shape": effective_sheet_mode(),
         # 静止读字时 OCR 读出来的屏幕文字（可能带错字），宿主塞进提示词。
         "ocrText": OCR_TEXT[0],
         "sheet": len(images) > 0 and any(kind == "sheet" for kind, _ in images),
@@ -2117,17 +2091,12 @@ def read_commands():
             if isinstance(tier, str) and tier in TIERS and tier != STATE["tier"][STATE["mode"]]:
                 STATE["tier"][STATE["mode"]] = tier
                 apply_preset()
-            shape = message.get("sheetMode")
-            if isinstance(shape, str) and shape in ("sheet", "single", "both", ""):
-                STATE["sheetMode"][STATE["mode"]] = shape
-            for key in ("intervalMs", "threshold", "cooldownMs", "maxWidth", "floorSec", "silentMax"):
+            for key in ("intervalMs", "cooldownMs", "floorSec", "silentMax"):
                 value = message.get(key)
                 if isinstance(value, (int, float)):
-                    STATE[key] = float(value) if key in ("threshold", "floorSec", "silentMax") else int(value)
+                    STATE[key] = float(value) if key in ("floorSec", "silentMax") else int(value)
             STATE["intervalMs"] = max(400, min(60000, STATE["intervalMs"]))
-            STATE["threshold"] = max(0.005, min(0.9, STATE["threshold"]))
             STATE["cooldownMs"] = max(5000, min(3600000, STATE["cooldownMs"]))
-            STATE["maxWidth"] = max(320, min(2560, STATE["maxWidth"]))
             STATE["floorSec"] = max(5.0, min(1800.0, STATE["floorSec"]))
             STATE["silentMax"] = max(10.0, min(3600.0, STATE["silentMax"]))
             emit({"event": "config", **STATE})
@@ -2356,7 +2325,6 @@ def main():
             with FRAMES_LOCK:
                 RECENT.append({"small": small, "t": now, "score": score})
 
-            cut_abs = max(MIN_CUT, min(0.9, float(STATE["threshold"])))
             cooldown = float(STATE["cooldownMs"]) / 1000.0
             floor = float(STATE["floorSec"])
 
