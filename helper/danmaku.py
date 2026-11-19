@@ -8,7 +8,6 @@
 """
 import json
 import os
-import random
 import sys
 import time
 import tkinter as tk
@@ -141,8 +140,7 @@ def main():
         return [top + i * gap for i in range(count)]
 
     lanes = make_lanes()
-    busy = [0.0] * len(lanes)
-    items = []   # [canvas_id, x, y, width, lane_index]
+    items = []   # [canvas_id, x, y, width, lane_index, shadow_ids, offs]
     seen = set()
     # 启动时把字幕里现成的**全部**记下来，别一开就把上一轮的话重飘一遍。
     # 以前只记最后一句，前面几行全被当成新的，开一次就倒放三四句旧台词。
@@ -150,47 +148,53 @@ def main():
         _t = _ln.strip()
         if _t:
             seen.add(_t)
-    cfg_mtime = [0.0]
+    # 记的是「当前配置文件的时间戳」，不是 0。以前写死 0，第一次 tick 必然判定
+    # 「配置变了」而重走一遍重排——那一趟会把道全清空，正好把启动时先放出去的
+    # 那句测试字算成空道，第一句真字幕就压在同一行上。
+    try:
+        cfg_mtime = [os.path.getmtime(CONFIG) if CONFIG else 0.0]
+    except OSError:
+        cfg_mtime = [0.0]
 
-    def pick_y(size):
-        """在弹幕区里挑一个 y：随机，但避开正在飘的那些（免得两条叠一起）。"""
-        lo, hi = lanes[0], lanes[-1]
-        for _ in range(8):
-            y = random.randint(lo, hi)
-            clash = False
-            for it in items:
-                if abs(it[2] - y) < size + 8:
-                    clash = True
-                    break
-            if not clash:
-                return y
-        return random.randint(lo, hi)
+    def lane_free(i):
+        """第 i 条道上还有没有字没走完。
+
+        判据是「上一条的右边缘出没出屏幕右边」——还没完全进屏就放新的，两条就叠。
+        以前这里是 busy[i]，放上去设成屏宽，之后再没人减过，道永远算满；
+        偏偏第一次 tick 又把 busy 整个清零，于是开头那条测试字和第一句真字幕
+        落在同一条道上，屏幕上就是两行字糊成一团。"""
+        for it in items:
+            if it[4] == i and it[1] + it[3] / 2.0 > sw - 30:
+                return False
+        return True
 
     def spawn(text):
+        """放一条出去；所有道都占着就返回 False，让调用方把它留在队列里。"""
         family = style["family"]
         size = style["size"]
-        for i, right in enumerate(busy):
-            if right < sw - 60:
-                w = tkfont.Font(family=family, size=size, weight="bold").measure(text)
-                x0 = sw + w // 2
-                # y 用这一条轨道自己的位置，不要再随机。
-                # 以前 busy[i] 判断「第 i 条道空了」，y 却另去 pick_y 随机取，
-                # 结果是这条道明明空着，弹幕却飘到别人道上，几条叠在一起。
-                y0 = lanes[i]
-                # 黑字垫偏 2px 当描边，主字压上面——背景再花也认得出
-                # 描边四方向各一层（各偏 1px），不会显得整句往一边偏
-                offs = ((-1, 0), (1, 0), (0, -1), (0, 1))
-                shadow_ids = [
-                    cv.create_text(x0 + dx, y0 + dy, text=text,
-                                   font=(family, size, "bold"),
-                                   fill=outline_color(style["color"]), anchor="center")
-                    for dx, dy in offs
-                ]
-                item_id = cv.create_text(x0, y0, text=text,
-                                         font=(family, size, "bold"), fill=style["color"], anchor="center")
-                items.append([item_id, x0, y0, w, i, shadow_ids, offs])
-                busy[i] = sw
-                return
+        w = tkfont.Font(family=family, size=size, weight="bold").measure(text)
+        for i in range(len(lanes)):
+            if not lane_free(i):
+                continue
+            x0 = sw + w // 2
+            # y 用这一条轨道自己的位置，不要再随机。
+            # 以前 busy[i] 判断「第 i 条道空了」，y 却另去 pick_y 随机取，
+            # 结果是这条道明明空着，弹幕却飘到别人道上，几条叠在一起。
+            y0 = lanes[i]
+            # 黑字垫偏 2px 当描边，主字压上面——背景再花也认得出
+            # 描边四方向各一层（各偏 1px），不会显得整句往一边偏
+            offs = ((-1, 0), (1, 0), (0, -1), (0, 1))
+            shadow_ids = [
+                cv.create_text(x0 + dx, y0 + dy, text=text,
+                               font=(family, size, "bold"),
+                               fill=outline_color(style["color"]), anchor="center")
+                for dx, dy in offs
+            ]
+            item_id = cv.create_text(x0, y0, text=text,
+                                     font=(family, size, "bold"), fill=style["color"], anchor="center")
+            items.append([item_id, x0, y0, w, i, shadow_ids, offs])
+            return True
+        return False
 
     def tick():
         # next_spawn_at 定义在 main() 里，这里要重新赋值，必须声明 nonlocal。
@@ -212,8 +216,10 @@ def main():
             style["speedLevel"] = str(new_cfg.get("danmakuSpeedLevel") or DEFAULTS["danmakuSpeedLevel"])
             style["speed"] = float(new_cfg.get("danmakuSpeed") or 0) or None
             style["color"] = str(new_cfg.get("danmakuTextColor") or DEFAULTS["danmakuTextColor"])
-            lanes[:] = make_lanes()
-            busy[:] = [0.0] * len(lanes)
+            # 屏幕上还有字在飘的时候不重排轨道：轨道的 y 一变，正在飞的几条会
+            # 卡在旧位置，新放出来的按新位置算，又叠上去了。等屏上清干净再换。
+            if not items:
+                lanes[:] = make_lanes()
 
         # 速度：优先用拉条的数值（dmemakuSpeed，40~800），老配置只有档位就按档位查
         speed = style.get("speed")
@@ -232,7 +238,6 @@ def main():
                 if len(it) > 6:
                     for sid in it[5]:
                         cv.delete(sid)
-                busy[it[4]] = 0.0
                 items.remove(it)
 
         lines = read_hud()
@@ -251,9 +256,12 @@ def main():
         # 一次只放一条；上一条按字数估一个朗读时长，够长了再放下一条。
         now = time.time()
         if pending and now >= next_spawn_at:
-            text = pending.pop(0)
-            spawn(text)
-            next_spawn_at = now + max(1.6, min(7.0, len(text) * 0.22))
+            if spawn(pending[0]):
+                text = pending.pop(0)
+                next_spawn_at = now + max(1.6, min(7.0, len(text) * 0.22))
+            else:
+                # 道全占着就先留着这句，别吞掉。以前是 pop 完再放，放不下就丢了。
+                next_spawn_at = now + 0.2
         root.after(TICK_MS, tick)
 
     # 开弹幕就先飘一条测试，不用等真的说话才知道效果
