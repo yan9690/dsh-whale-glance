@@ -129,6 +129,9 @@ await check('工具 schema 能被 dsh-tools 接受', async () => {
     webServer: { register: () => () => {} },
     agents: { list: () => [] },
     on: () => () => {},
+    // 宿主清理注册（lib/index.js 末尾 ctx.effect）。缺了它会直接抛
+    // 「ctx.effect is not a function」，看起来像插件坏了，其实是这个假 ctx 太旧。
+    effect: () => () => {},
     logger: { info: () => {}, warn: () => {} },
   };
   const { apply } = await import(`../lib/index.js?preflight=${Date.now()}`);
