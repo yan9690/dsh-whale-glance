@@ -201,7 +201,7 @@ def foreground_title():
         return ""
 
 
-# 游戏资料库：games-all.json（预置几百个游戏的名称/简介/类型）。
+# 游戏资料库：包内 games-all.json（预置几百条）+ 用户目录 learned-games.json（补的）。
 GAME_DB = {}
 # 游戏黑话 + 基础规则：games-notes.json（按游戏名索引）。
 GAME_NOTES = {}
@@ -297,19 +297,63 @@ def game_note(name):
     return None
 
 
-def load_game_db():
-    """读 games-all.json 到 GAME_DB。key 用英文名规范化。"""
-    global GAME_DB
-    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "games-all.json")
+def learned_games_path():
+    """用户补出来的游戏条目写这里：<DSH_HOME>/storages/whale-glance/learned-games.json。
+
+    不能写包内的 helper/games-all.json：那是随插件发布的出厂数据，插件升级/重装
+    会把插件目录整个覆盖，写进去等于每次升级都把手动补的条目冲回出厂那几百条。
+    路径跟宿主 lib/index.js 的 STORAGE 用同一套约定（DSH_HOME 可改，没设就是
+    ~/.dsh），不写死某个用户的绝对路径，Windows / macOS / Linux 都能用。
+    """
+    root = os.environ.get("DSH_HOME") or os.path.join(os.path.expanduser("~"), ".dsh")
+    return os.path.join(root, "storages", "whale-glance", "learned-games.json")
+
+
+def _read_json_obj(path):
+    """读一个 JSON 对象文件；不存在、坏了、不是对象，都当空继续。
+
+    补库文件放在用户目录、可能被手改，不能因为它坏了就让认游戏这条链崩掉。
+    utf-8-sig 顺手吃掉记事本可能加的 BOM。
+    """
     try:
-        with open(path, encoding="utf-8") as f:
+        with open(path, encoding="utf-8-sig") as f:
             data = json.load(f)
     except Exception:
-        return
-    for aid, info in data.items():
-        name = (info or {}).get("name", "")
-        key = _norm(name)
-        if key and key not in GAME_DB:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _write_learned_games(data):
+    """整写用户补库文件：目录不存在先建，UTF-8 无 BOM、LF 换行。
+
+    先写同目录临时文件再 os.replace：进程恰好在写盘时被杀也不会留下半截 JSON
+    （半截文件下次读会被当成空库，等于把补过的条目全弄丢）。
+    """
+    path = learned_games_path()
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8", newline="\n") as f:
+        json.dump(data, f, ensure_ascii=False, indent=1)
+    os.replace(tmp, path)
+
+
+def load_game_db():
+    """读游戏资料库到 GAME_DB：包内出厂数据 + 用户补库，用户补的优先。
+
+    以前只读包内 games-all.json；补库现在写到用户目录，这里两份都读：
+    先包内（随插件发布的那几百条），再 learned-games.json（自动抓百科、面板
+    确认存下来的）。同一款游戏两边都有时用用户那份——补的名字和简介不该被
+    升级回来的出厂数据盖掉。两份坏了/缺了都只是少几条，不会抛异常。
+    """
+    global GAME_DB
+    package_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "games-all.json")
+    for path, override in ((package_path, False), (learned_games_path(), True)):
+        for aid, info in _read_json_obj(path).items():
+            if not isinstance(info, dict):
+                continue
+            key = _norm(info.get("name", ""))
+            if not key or (not override and key in GAME_DB):
+                continue
             GAME_DB[key] = info
 
 
@@ -759,7 +803,7 @@ def _heybox_page_genres(appid):
 
 
 def bg_fetch_game(title):
-    """后台补库：认不出就抓一次百科，写回 games-all.json 并更新 STATE。
+    """后台补库：认不出就抓一次百科，写进用户目录 learned-games.json 并更新 STATE。
 
     抓到就把这个标题当已确认游戏（从待确认里撤下）；没抓到就不动，
     让宿主那边的「这是不是游戏」卡片继续问用户。
@@ -787,12 +831,10 @@ def bg_fetch_game(title):
                     merged.append(g)
             genres = merged
     try:
-        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "games-all.json")
         with FETCH_LOCK:
-            data = {}
-            if os.path.exists(path):
-                with open(path, encoding="utf-8") as f:
-                    data = json.load(f)
+            # 补库写用户数据目录，不写包内 games-all.json：包内文件升级时会被
+            # 覆盖，写进去的条目下次升级就没了（只能读，不能写）。
+            data = _read_json_obj(learned_games_path())
             key = _norm(name)
             if not key:
                 return
@@ -800,8 +842,7 @@ def bg_fetch_game(title):
             # 还是英文，没这条别名就永远匹配不上中文条目，等于白补。
             aliases = [title] if title and _norm(title) != key else []
             data[key] = {"name": name, "short_description": desc, "genres": genres, "aliases": aliases}
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=1)
+            _write_learned_games(data)
             GAME_DB[key] = data[key]
         STATE["game"] = name
         STATE["pace"] = ""
@@ -835,12 +876,9 @@ def resolve_unknown(title, is_game, game_name=""):
         return
     name = (game_name or "").strip() or title
     try:
-        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "games-all.json")
         with FETCH_LOCK:
-            data = {}
-            if os.path.exists(path):
-                with open(path, encoding="utf-8") as f:
-                    data = json.load(f)
+            # 同上：面板确认的条目写用户数据目录，包内 games-all.json 只读不写。
+            data = _read_json_obj(learned_games_path())
             key = _norm(name)
             if not key:
                 return
@@ -848,11 +886,14 @@ def resolve_unknown(title, is_game, game_name=""):
                 data[key] = {"name": name, "short_description": "", "genres": [], "aliases": [title]}
             else:
                 info = data[key]
+                if not isinstance(info, dict):
+                    # 手改坏的条目（不是对象）当新的重建，别让 .get 抛出去
+                    info = {}
+                    data[key] = info
                 aliases = set(info.get("aliases") or [])
                 aliases.add(title)
                 info["aliases"] = sorted(aliases)
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=1)
+            _write_learned_games(data)
             GAME_DB[key] = data[key]
         STATE["game"] = name
         PENDING_SENT.discard(title)
@@ -2399,7 +2440,12 @@ def main():
                         last_frame_t = newest
             previous = current
         except Exception as exc:
-            emit({"event": "error", "message": "grab failed: %r" % (exc,)})
+            # 这里兜的是整轮采样（抓屏、判分、拼图、渲染都可能在里面）。
+            # 只报 %r 出来根本看不出哪一行，11-19 那条「cannot unpack」查了半天无解——带上最后两帧调用栈。
+            import traceback as _tb
+            _frames = [ln.strip() for ln in _tb.format_exc().strip().splitlines() if ln.strip().startswith("File ")]
+            _where = _frames[-1] if _frames else "?"
+            emit({"event": "error", "message": "采样出错：%r @ %s" % (exc, _where)})
         _wait = adaptive_wait(STATE["intervalMs"] / 1000.0)
         if sample_log_count % 5 == 0:
             try:

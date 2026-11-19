@@ -1,6 +1,11 @@
 # awesome-dsh-plugin 上架条目
 # 放到 awesome-dsh-plugin 仓库的 data/plugins/yan9690__dsh-whale-glance.yml
 # url/name 必须与仓库完全一致
+#
+# 不要写 npm: / version:。上游条目只接受 url / name / category / description /
+# icon / tarball（见 scripts/lib/entries.mjs 的 ENTRY_KEYS），未知字段会被 pr-check 拒绝。
+# npm 和 version 由上游 probe-npm.mjs 从 registry 自动映射，前提是包的 repository
+# 字段指回本仓库（contributing.md「npm package」一节）；本地手写没有意义。
 
 url: https://github.com/yan9690/dsh-whale-glance
 name: yan9690/dsh-whale-glance
