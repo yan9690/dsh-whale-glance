@@ -1,6 +1,6 @@
 {
   "name": "dsh-whale-glance",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "让鲸鱼娘看着你的屏幕陪你玩：检测画面变化，自动看一眼、说一句，字幕挂在屏幕底部。",
   "keywords": [
     "dsh",
@@ -27,6 +27,7 @@
     "helper/learn_text.py",
     "helper/hud_window.py",
     "helper/danmaku.py",
+    "helper/play_mci.ps1",
     "helper/games-all.json",
     "helper/games-notes.json",
     "cordis.patch.yml",
