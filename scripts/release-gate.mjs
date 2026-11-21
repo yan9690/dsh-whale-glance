@@ -22,7 +22,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const QUICK = process.argv.includes('--quick');
@@ -150,8 +150,9 @@ if (QUICK) {
           'LICENSE', 'LICENSE-APACHE', 'NOTICE', 'CREDITS.md', 'cordis.patch.yml'];
         const missing = checks.filter((f) => !fs.existsSync(path.join(installed, f)));
         const installedPkg = JSON.parse(fs.readFileSync(path.join(installed, 'package.json'), 'utf8'));
+        const entryUrl = pathToFileURL(path.join(installed, 'lib/index.js')).href;
         const probe = run(process.execPath, ['-e',
-          `import(${JSON.stringify(path.join(installed, 'lib/index.js').replace(/\\/g, '/'))}).then(m=>{` +
+          `import(${JSON.stringify(entryUrl)}).then(m=>{` +
           'if(typeof m.apply!=="function")throw new Error("导出里没有 apply");console.log("apply ok")})' +
           `.catch(e=>{console.error(String(e).slice(0,200));process.exit(1)})`]);
         if (missing.length) fail('冷装', `包里缺 ${missing.join(', ')}`);
