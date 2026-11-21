@@ -23,6 +23,7 @@
   "files": [
     "lib/index.js",
     "lib/client.js",
+    "lib/segment-rules.js",
     "helper/sense.py",
     "helper/learn_text.py",
     "helper/hud_window.py",
