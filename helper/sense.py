@@ -125,6 +125,22 @@ GRID = (64, 36)
 MAX_FRAMES = 4             # 翻最近帧时最多拼这么多格
 BUFFER_CAP = 20            # 短历史留二十帧：动满要拼 16 格，得留够 + 余量
 RECENT_FRAMES = 24         # 「看这一段」的滚动缓冲（只存缩略图，约 24MB）
+# 拼图密度：一张图几格、一次发几张。
+# 格数多了每格就糊成色块（64 格时一格只有一百多像素宽，模型只能看见颜色块，
+# 于是把相邻镜头编成一句话——11-20 看番那局「病房」「一大桌子菜」都是这么来的）。
+# 但格数少了又会漏掉快切中间的过程，所以不是砍格数，是「一段切几张」：
+# 每张最多 MAX_CELLS 格，帧多就多切一张，镜头一个不丢。
+MAX_CELLS = 20             # 游戏线每张拼图的格数上限（打团的快切要留够过程）
+# 视频线只留 9 格：番剧一段里真变化没那么多，格子多了每格就小到只剩一团颜色，
+# 模型只能数格子编变化（「病房」「一大桌子菜」那批就是这么来的）。
+# 格少了每格就大，看得清脸和字幕，也不用它去数二十个格子。
+MAX_CELLS_VIDEO = 9
+MAX_SHEETS = 4
+SAME_SHOT_CUT = 6.0        # 相邻两帧在 64×36 网格上的平均差低于这个 = 画面没变，留一帧就够
+# 视频线放宽到 15：动画的同一张特写一直在轻微抖（头发、光效、摄影机呼吸），
+# 64×36 平均差常有 8-14，拿游戏的 6.0 去判等于一张都去不掉——一集里同一张脸能铺满十几格。
+# 真切镜头的差值远在这之上，放宽不会把切点吃掉；游戏线不动，打团的小动作就是信息。
+SAME_SHOT_CUT_VIDEO = 15.0
 GUTTER = 2
 
 # ---- 采样节奏自适应 ----
@@ -145,6 +161,9 @@ READ_JUMP_HOLD = 2.0       # 路 B：断崖（画面突增，像打开面板）�
 READ_JUMP_DELTA = 0.25     # 断崖判据：score 比前几帧均值高这么多
 READ_JUMP_ABS = 0.3        # 且绝对值过这个门槛，才算断崖（不是普通小动作）
 STILL_SAMPLE_SEC = 12.0    # 静止时也隔这么久留一帧，免得想问的时候没图
+IDLE_MUTE_SEC = 120.0      # 键鼠这么久没动 = 人不在。游戏画面自己还在动（挂机动效、弹幕、特效），
+                           # 只看画面拦不住，会一直开口——11-20 她上个厕所回来被连说 4 次。
+                           # 只掐游戏线；视频线盯着片子不碰键鼠是常态，按这个掐会整场哑掉。
 
 # ---- 亮度归一 + 黑边补偿（移植自 dsh-see-now 0.2 / Apache-2.0）----
 # 绝对 HSV 差配常数阈值，暗场必漏切点。这里把分数换算到「参考亮度 96、无黑边」的刻度上。
@@ -186,6 +205,23 @@ def emit(payload):
 def log(text):
     sys.stderr.write(str(text) + "\n")
     sys.stderr.flush()
+
+
+def user_idle_sec():
+    """键盘鼠标多久没动了（秒）。取不到就返回 0，当成「人在」。"""
+    try:
+        class _LII(ctypes.Structure):
+            _fields_ = [("cbSize", ctypes.c_uint), ("dwTime", ctypes.c_ulong)]
+
+        info = _LII()
+        info.cbSize = ctypes.sizeof(_LII)
+        if not user32.GetLastInputInfo(ctypes.byref(info)):
+            return 0.0
+        tick = ctypes.windll.kernel32.GetTickCount()
+        # GetTickCount 是 32 位、49.7 天翻一次，差值按无符号算
+        return max(0.0, ((tick - info.dwTime) & 0xFFFFFFFF) / 1000.0)
+    except Exception:
+        return 0.0
 
 
 def foreground_title():
@@ -1185,8 +1221,21 @@ def grab_for_state():
 
     match = str(STATE["windowMatch"]).strip().lower()
     capturable = bool(STATE.get("hudCapturable"))
-    # 视频模式不理「只盯窗口」：看片时窗口是浏览器，还拿上次的游戏标题去比，
-    # 永远对不上，一张都不抓。视频就看整屏。
+    # 视频模式也要守「只盯窗口」这道门。以前这里把视频线整个跳过，直接抓前台矩形：
+    # 用户一边看番一边切到游戏/任务视图，那些画面就被当成番剧剧情讲；而主循环的标题
+    # 来自 find_window_rect(windowMatch)，图和标题根本不是一个窗口。
+    # 只在前台确实是那个窗口时才抓；windowOnly 关着或没填窗口名时条件不成立，
+    # 行为跟以前完全一样。
+    if STATE["windowOnly"] and STATE["mode"] == "video" and match:
+        fg = foreground_title()
+        # 字幕窗置顶，看视频时会抢前台——它不是用户在看的东西，当空处理
+        if fg.strip() == "余光":
+            fg = ""
+        if match not in fg.lower():
+            # 前台不是那个窗口：不抓、不唤醒，也不留旧画面去拼
+            return _miss("foreground-mismatch")
+    # 视频模式匹配上了就走下面「没指定窗口」那条通用路径：前台窗口矩形优先，退回整屏。
+    # 不按「只盯窗口」那条走 PrintWindow——看片时窗口是浏览器，取后台窗口没意义。
     if STATE["windowOnly"] and STATE["mode"] != "video":
         # 说好只盯某个窗口，却没给窗口名——那就一张都别抓。
         if not match:
@@ -1360,6 +1409,14 @@ def row_window(rows):
     if rows is None or np is None:
         return None, 0.0
     ROWS.append(rows)
+    # 视频线缩略图 320×180、游戏线跟着屏幕宽走（一千多宽），两种行宽不能混进
+    # 同一个数组：切模式后的头几帧 np.asarray(ROWS) 会抛 inhomogeneous shape，
+    # 整轮采样就断了。这里只留跟最新一帧同长度的行，宁可少几帧亮度样本，绝不抛。
+    last_len = len(rows)
+    if any(len(r) != last_len for r in ROWS):
+        kept = [r for r in ROWS if len(r) == last_len] or [rows]
+        ROWS.clear()
+        ROWS.extend(kept)
     stack = np.asarray(ROWS, dtype=np.float32)
     row_mean = stack.mean(axis=0)
     row_max = stack.max(axis=0)
@@ -1442,7 +1499,7 @@ def _layout(count, aspect=None):
         if r > c * 3 or c > r * 3:
             continue
         empty = c * r - count
-        if empty > 2:
+        if empty > 3:
             continue
         cellw = w // c
         total_h = r * (cellw / aspect)
@@ -1501,6 +1558,102 @@ def _pick_segment(seg, want=64):
     return result
 
 
+def _cells_per_sheet():
+    """一张拼图最多几格：按模式取值，不新开配置项。
+
+    视频 9 / 游戏 20，理由见文件头的 MAX_CELLS / MAX_CELLS_VIDEO。
+    """
+    return MAX_CELLS_VIDEO if STATE["mode"] == "video" else MAX_CELLS
+
+
+def _thin_repeat(frames):
+    """同一镜头里几乎没变的帧合并成一帧。
+
+    实测：一支 MV 的十秒里抽 50 帧，其中 48 对相邻帧差不到 0.3%，全是同一张脸——
+    铺满 50 格只是把同一张图重复五十遍。留一帧就够，省下的是 token 和「它在认真看」的假象。
+    切镜头那帧永远留；动作戏每帧都在变，去重也不会吃掉过程。
+    """
+    # 阈值按模式取：动画的轻微抖动比游戏画面大，视频线用宽的（见 SAME_SHOT_CUT_VIDEO），
+    # 不然番剧里同一张特写一集能铺满十几格，拼图里全是重复的脸。
+    cut = SAME_SHOT_CUT_VIDEO if STATE["mode"] == "video" else SAME_SHOT_CUT
+    kept = []
+    prev = None
+    for f in frames:
+        img = f.get("small")
+        if img is None:
+            kept.append(f)
+            continue
+        try:
+            grid = img.convert("L").resize((64, 36))
+            raw = grid.tobytes()
+        except Exception:
+            kept.append(f)
+            continue
+        if prev is None or f.get("cut"):
+            kept.append(f)
+            prev = raw
+            continue
+        diff = sum(abs(a - b) for a, b in zip(raw, prev)) / float(len(raw))
+        if diff >= cut:
+            kept.append(f)
+            prev = raw
+    # 最后那一帧是「此刻」，不管变没变都留着
+    if frames and (not kept or kept[-1] is not frames[-1]):
+        kept.append(frames[-1])
+    return kept
+
+
+def _split_into_sheets(frames):
+    """切成一张张拼图：先按镜头边界切段，段里重复帧去掉，帧还多就再均分成几张。
+
+    一段十秒的打戏能有五六十帧，全塞进一张图就是每格几十像素宽；
+    均分成几张之后每格都看得清，而且一帧不丢——砍格数会把快切中间的过程砍掉。
+    """
+    out = []
+    cells = _cells_per_sheet()
+    # 视频线只出一张：提示词里报的帧数就是这张上的帧数，图和字对得上；
+    # 分几段各出一张的话，模型看到三四张拼图、字里却说「这几帧」，而且每张图都照算 token。
+    if STATE["mode"] == "video" and cells == MAX_CELLS_VIDEO:
+        flat = []
+        for seg in _split_segments(frames, 10.0):
+            flat.extend(_thin_repeat(seg))
+        flat.sort(key=lambda f: f.get("t", 0) or 0)
+        if len(flat) > MAX_CELLS_VIDEO:
+            step = (len(flat) - 1) / float(MAX_CELLS_VIDEO - 1)
+            picked, seen = [], set()
+            for i in range(MAX_CELLS_VIDEO):
+                j = int(round(i * step))
+                if j not in seen:
+                    seen.add(j)
+                    picked.append(flat[j])
+            flat = picked
+        return [flat] if flat else []
+    for seg in _split_segments(frames, 10.0):
+        seg = _thin_repeat(seg)
+        if not seg:
+            continue
+        n = int(math.ceil(len(seg) / float(cells)))
+        if n <= 1:
+            out.append(seg)
+            continue
+        for i in range(n):
+            a = int(round(i * len(seg) / float(n)))
+            b = int(round((i + 1) * len(seg) / float(n)))
+            if b > a:
+                out.append(seg[a:b])
+    if len(out) <= MAX_SHEETS:
+        return out
+    # 张数到顶了：把帧摊平重切成 MAX_SHEETS 张，顺序不变
+    flat = [f for seg in out for f in seg]
+    chunks = []
+    for i in range(MAX_SHEETS):
+        a = int(round(i * len(flat) / float(MAX_SHEETS)))
+        b = int(round((i + 1) * len(flat) / float(MAX_SHEETS)))
+        if b > a:
+            chunks.append(flat[a:b])
+    return chunks
+
+
 def compose(frames):
     """把留着的那几帧拼成一张图，每格左上角烧序号。
 
@@ -1547,7 +1700,7 @@ def compose(frames):
     return sheet
 
 
-MAX_FILES = 400          # frames 目录最多留这么多张，超了从最旧的删起
+MAX_FILES = 200          # frames 目录最多留这么多张，超了从最旧的删起
 
 
 def prune():
@@ -1929,10 +2082,16 @@ def read_frames_text(frames, fallback=None):
 
 
 def render_outputs(frames, full):
-    """按当前状态产出图，返回 [(kind, path)]。互斥——每次最多一张。
+    """按当前状态产出图，返回 (图列表, 拼图里真画进去的帧)。互斥——每次最多一张。
 
     视频 -> 只发字幕条；静止读字 -> OCR 出文字 + 小图（省 token）；
     画面在动 -> 拼图看过程。
+
+    第二个返回值是**第一张拼图里真正烧进去的那几帧**。分多张时只报第一张：
+    每张拼图的格子序号都从 1 重新数，报全部会跟第二张的 1 号格错位。
+    emit_change 报给宿主的帧数/时间点必须用它，不能直接报传进来的 frames——
+    视频线在这里会切段、拆张、段内去重，传进来的帧数跟画进图里的不是一回事
+    （实测出现过「提示词列了 17 个时间点、拼图里有 20 格」）。
     """
     mode = STATE["mode"]
     reading = still_reading()
@@ -1968,10 +2127,19 @@ def render_outputs(frames, full):
                 SUBTITLE_HISTORY.pop(0)
         OCR_TEXT[0] = "\n".join(t for _ts, t in SUBTITLE_HISTORY)
         # OCR 读出字了就不发字幕条图，省那张一千多 token 的图——OCR 都读不清的字，模型看图更读不清
-        # 拆段：把跨度切成 10 秒一段，每段 64 格一张图，几张按顺序一起发。
-        # 不拆的话 60 秒跨度的 64 格每格隔近一秒，对话戏都糊成一块。
-        segments = _split_segments(frames, 10.0)
-        sheets = [("sheet", save_jpeg(compose(_pick_segment(seg, 64)), "sheet")) for seg in segments if seg]
+        # 拆段：先按镜头边界切成段，段里帧多就再均分成几张图，每张最多几格按模式取。
+        # 不拆的话几十帧糊成一张，每格糊成色块；只砍格数又会漏掉快切中间的过程。
+        cells = _cells_per_sheet()
+        segments = _split_into_sheets(frames)
+        sheets = []
+        first_picked = []   # 第一张拼图实际画进去的帧，报给宿主的就是这一组
+        for seg in segments:
+            picked = _pick_segment(seg, cells) if seg else []
+            if not picked:
+                continue
+            sheets.append(("sheet", save_jpeg(compose(picked), "sheet")))
+            if not first_picked:
+                first_picked = picked
         if OCR_TEXT[0].strip():
             out.extend(sheets)
         else:
@@ -1979,19 +2147,19 @@ def render_outputs(frames, full):
             if strip is not None:
                 out.append(("strip", save_jpeg(strip, "strip")))
             out.extend(sheets)
-        return out
+        return out, first_picked
     if reading:
         # 静止读字：本地 OCR 出文字 + 高清图。读字就得高清，图不再缩到 800——
         # 那是之前为了省 token 瞎降的，800 的图字糊、模型读不动，OCR 也跟着错。
         if full is None:
             full = frames[-1]["small"]
         if (time.time() - LAST_SINGLE[0]) < READING_GAP:
-            return out
+            return out, []
         # 挂机闸门：画面跟上次发的高清几乎一样（人没动），就别再重复喂图，省 token。
         cur_grid = frames[-1].get("grid") if frames else None
         if cur_grid is not None and LAST_READING_GRID[0] is not None:
             if score_pair(LAST_READING_GRID[0], cur_grid) < READING_SAME_CUT:
-                return out
+                return out, []
         LAST_SINGLE[0] = time.time()
         LAST_READING_GRID[0] = cur_grid
         # 读字统一走高清（1920 封顶，小屏不放大，4K 缩到 1920），OCR 和图用同一张。
@@ -2004,10 +2172,11 @@ def render_outputs(frames, full):
             return any('\u4e00' <= c <= '\u9fff' for c in s)
         long_cjk = [w for w in words if len(w) >= 8 and _has_cjk(w)]
         if not long_cjk:
-            return out  # 没成句的中文文本，不是读字（站定发呆 / 纯 HUD），不出单张
+            return out, []  # 没成句的中文文本，不是读字（站定发呆 / 纯 HUD），不出单张
         OCR_TEXT[0] = "\n".join(words)
         out.append(("single", save_jpeg(scaled, "single")))
-        return out
+        # 单张画的就是最后一帧（= 此刻），帧列表只能报它
+        return out, frames[-1:]
     # 画面在动：只发拼图。图 + 字才是给模型的那条数据——第二张全屏图不给，
     # 字已经在下面的 OCR 里了，多一张图只是白烧 token（快的场景要的是「发生了什么」）。
     out.append(("sheet", save_jpeg(compose(frames), "sheet")))
@@ -2018,7 +2187,7 @@ def render_outputs(frames, full):
             OCR_TEXT[0] = read_frames_text(frames, full)
         except Exception:
             OCR_TEXT[0] = ""
-    return out
+    return out, frames
 
 
 def emit_change(frames, now, full=None):
@@ -2027,9 +2196,13 @@ def emit_change(frames, now, full=None):
     # 视频线不逐帧去重：去了重 64 格就铺不满，看着像「中间空了一大截」。
     # 视频要的就是「这段时间里每一小段都留一格」，连续比省格子重要。
     shown = frames if STATE["mode"] == "video" else trim_redundant(frames)
-    images = render_outputs(shown, full)
+    # 图里真正画进去的帧由 render_outputs 交回来：视频线在那边还会切段、拆张、去重，
+    # 直接报 shown 会出现「提示词列了 17 个时间点、拼图里有 20 格」这种对不上的情况。
+    images, sheet_frames = render_outputs(shown, full)
     if not images:
         return None
+    # 没有拼图时（单张/字幕条兜底）图里就是最后一帧，帧列表也只报它
+    drawn = sheet_frames if len(sheet_frames) > 0 else shown[-1:]
     base = shown[0]["t"]
     mode = STATE["mode"]
     title = foreground_title()
@@ -2069,10 +2242,12 @@ def emit_change(frames, now, full=None):
         # 静止读字时 OCR 读出来的屏幕文字（可能带错字），宿主塞进提示词。
         "ocrText": OCR_TEXT[0],
         "sheet": len(images) > 0 and any(kind == "sheet" for kind, _ in images),
-        "count": len(shown),
+        # 帧数/时间点必须跟拼图里真实的格子对上。分多张时只报第一张：
+        # 每张的格子序号都从 1 重数，报全部会跟第二张的 1 号格错位。
+        "count": len(drawn),
         "frames": [
             {"t": round(frame["t"] - base, 1), "score": round(frame["score"], 3)}
-            for frame in shown
+            for frame in drawn
         ],
     }
     emit(payload)
@@ -2127,6 +2302,14 @@ def read_commands():
             mode = message.get("mode")
             if isinstance(mode, str) and mode in MODES and mode != STATE["mode"]:
                 STATE["mode"] = mode
+                # 两种模式的行宽不一样（视频缩略 320×180，游戏跟着屏幕宽走），
+                # 切模式那一刻 ROWS 里还留着上一种的行宽，攒进去就是长短不一的
+                # 数组，np.asarray(ROWS) 会抛 inhomogeneous shape。这里直接清空。
+                ROWS.clear()
+                # 切进视频就忘掉「上一次片名」：下一帧真片名跟空比，会把上一次看视频
+                # 留下的台词历史清掉——中间打游戏那段不会再把旧剧的前情带回来。
+                if mode == "video":
+                    STATE["_lastVideoTitle"] = ""
                 apply_preset()
             tier = message.get("tier")
             if isinstance(tier, str) and tier in TIERS and tier != STATE["tier"][STATE["mode"]]:
@@ -2188,6 +2371,8 @@ def read_commands():
                 _match = str(STATE.get("windowMatch") or "").strip()
                 image = None
                 _wt = ""
+                _ox = _oy = 0          # 截屏图左上角对应的屏幕坐标，涂字幕窗时要减掉
+                _need_mask = False     # PrintWindow 拍的是窗口本身、不带字幕窗，只有截屏才要涂
                 if _match:
                     hwnd, _wt = find_window_hwnd(_match)
                     if hwnd:
@@ -2197,13 +2382,24 @@ def read_commands():
                         rect, _rt = find_window_rect(_match)
                         if rect is None:
                             rect = foreground_rect()
-                        image = grab_rect(rect) if rect else grab_full()
+                        if rect:
+                            image = grab_rect(rect)
+                            _ox, _oy = rect[0], rect[1]
+                        else:
+                            image = grab_full()
+                        _need_mask = True
                         _wt = _wt or _rt
                     else:
                         # 不限制窗口：抓整个屏幕，别只抓前台那块（前台常常是面板自己，
                         # 抓回来一片面板，看起来就像「没反应」）。
                         image = grab_full()
                         _wt = foreground_title()
+                        _need_mask = True
+                if image is not None and _need_mask and bool(STATE.get("hudCapturable")):
+                    # 字幕窗开着「可截图」时截屏会把它自己也拍进来。采样那条路一直
+                    # 这么涂（见 grab_for_state），手动「看一眼」这路以前漏了：图里带着
+                    # 自己的字，OCR 还会把「余光」窗口的字当成画面内容读进 ocrText。
+                    image = mask_hud(image, _ox, _oy)
                 # 「看一眼」也走 OCR：用原图读字，文字随事件带过去。
                 # 手动看一眼时画面上常是菜单/树/列表这种满屏小字，光给缩小的图模型读不动。
                 OCR_TEXT[0] = "\n".join(ocr_read(image))
@@ -2264,6 +2460,8 @@ def main():
     previous = None
     started = time.time()
     last_emit = 0.0
+    was_away = False        # 上一拍是不是「人不在」；用来在人回来那一下重置开口计时
+    read_said = [False]     # 这一段静止里是不是已经「停下来说过一句」了；画面再动过才清零
     last_frame_t = 0.0
     last_soft = time.time()
     last_move = started
@@ -2291,12 +2489,42 @@ def main():
                     _title = ""
             else:
                 _title = foreground_title()
+            # 视频模式：_title 是「面板指定要看的那个窗口」的名字，切到别的窗口它也不变
+            # （前台是 Ficket 时是 Ficket，切到游戏/任务视图还是 Ficket），下面那段换窗口
+            # 清理就永远不触发——上一个窗口的帧和台词会串进下一次拼图，看着就像剧里冒出
+            # 游戏界面。所以视频线额外盯前台标题：变了就当成换窗口，清掉短历史和字幕上下文。
+            # 空标题和字幕窗（「余光」）不算换：全屏播放、窗口刚切走时会短暂拿不到标题，
+            # 拿它比的话每次刷新都清一遍，同一部剧的前情就攒不住了。游戏模式不走这条。
+            if STATE["mode"] == "video":
+                _fg_now = foreground_title()
+                if _fg_now.strip() == "余光":
+                    _fg_now = ""
+                if _fg_now and _fg_now != STATE.get("_lastForegroundTitle"):
+                    STATE["_lastForegroundTitle"] = _fg_now
+                    with FRAMES_LOCK:
+                        BUFFER.clear()
+                    SUBTITLE_HISTORY.clear()
+                    SUBTITLE_STRIPS.clear()
+                    OCR_TEXT[0] = ""
             if _title != STATE.get("_lastTitle"):
                 STATE["_lastTitle"] = _title
                 # 换窗口就清掉短历史：上一窗口（比如 DSH）的旧帧会被拼图挑进去，
                 # 看着就像「游戏里冒出别的界面」。新窗口从零开始攒。
                 with FRAMES_LOCK:
                     BUFFER.clear()
+                # 视频模式换片：上一部的台词还攒在 SUBTITLE_HISTORY 里，不清掉就会被
+                # 当成新一部的「前情」一起塞进提示词（换一部剧，前情提示还是上一部）。
+                # 比的是「上一次真实片名」而不是 _lastTitle：字幕窗（标题「余光」）会抢
+                # 前台，拿它比的话每次切回来都算换片，同一部剧的上下文会被洗一遍。
+                # 标题空着也不算换片（全屏游戏、窗口没找着都会是空）。
+                if STATE["mode"] == "video":
+                    _vt = "" if _title.strip() == "余光" else _title
+                    if _vt and _vt != STATE.get("_lastVideoTitle"):
+                        SUBTITLE_HISTORY.clear()
+                        SUBTITLE_STRIPS.clear()   # 字幕条小图也是上一部的，兜底拼图别拼串
+                        OCR_TEXT[0] = ""
+                    if _vt:
+                        STATE["_lastVideoTitle"] = _vt
                 _g, _pace, _info = detect_game(_title)
                 STATE["game"] = _g or ""
                 STATE["pace"] = _pace or ""
@@ -2389,6 +2617,7 @@ def main():
                 last_move = now
             if score >= READ_MOTION_CUT:
                 last_read = now
+                read_said[0] = False   # 画面又动了：下一次停下来说一句是新的，不算重复
             STATE["motion"] = motion
             STATE["stillSec"] = now - last_read
             # 断崖检测（路 B 的开关）：画面一帧之间突增，像打开面板/切界面。
@@ -2415,7 +2644,13 @@ def main():
                 else:
                     # 开口间隔不能快于抓屏间隔，否则画面还没更新就瞎说
                     quiet = max(cooldown, floor, interval_sec)
+                adj_area = adj_mean = 0.0
                 if len(picked) > 1:
+                    # adj* 只是埋点：后面要能还原「这一拍画面到底动没动」
+                    for _a, _b in zip(picked, picked[1:]):
+                        _ar, _mn = diff_stats(_a.get("grid"), _b.get("grid"))
+                        adj_area = max(adj_area, _ar)
+                        adj_mean = max(adj_mean, _mn)
                     area, mean = diff_stats(picked[0].get("grid"), picked[-1].get("grid"))
                     cut = VIDEO_AREA_CUT if is_video else AREA_CUT
                     changed = area >= cut or mean >= HARD_CUT
@@ -2425,8 +2660,12 @@ def main():
                 silent_max = max(float(STATE.get("silentMax") or 300.0), quiet)
                 # 读字触发：路 A 静止 5 秒 / 路 B 断崖后稳住 2 秒（见 still_reading），
                 # 画面没「大变」但此刻最需要一张能看清字的高清——不等 silent_max 那 300 秒。
+                # 但一段静止只说一次：选关/任务选择那种界面，人在挑东西，画面几乎不动，
+                # 之前每隔 40 秒就被当「你在读字」说一句——11-20 她去趟厕所回来连了 4 句。
+                # 画面再动过（score 回到读字线以上）才允许下一次「停下来说一句」。
                 reading_due = (
                     not is_video
+                    and not read_said[0]
                     and still_reading()
                     and now - last_emit >= READING_GAP
                 )
@@ -2434,10 +2673,35 @@ def main():
                 not_switch = score < SWITCH_CUT
                 # 「画面在动就闭嘴」那条砍了：跑图、赶路、过场，画面一直在动，
                 # 那个判定会把正常陪看一起掐掉。少说话交给「最短开口」和提示词管。
-                if not_switch and ((changed and now - last_emit >= quiet) or reading_due or now - last_emit >= silent_max):
+                # 人不在就不开口：游戏画面自己在动，只看画面拦不住。只掐游戏线。
+                away = (not is_video) and user_idle_sec() >= IDLE_MUTE_SEC
+                if was_away and not away:
+                    # 人回来了：离开这段时间攒下的变化不补说，从这一拍重新起算开口间隔
+                    last_emit = now
+                was_away = away
+                if not_switch and not away and ((changed and now - last_emit >= quiet) or reading_due or now - last_emit >= silent_max):
+                    # 记下这次为什么开口：以后「它不该说话却说了」要能对着数据查，
+                    # 不能靠我在代码里猜。why = change / read / silent
+                    try:
+                        _why = "change" if (changed and now - last_emit >= quiet) else ("read" if reading_due else "silent")
+                        with open(os.path.join(OUT_DIR, "wake-why.log"), "a", encoding="utf-8") as _f:
+                            _f.write(json.dumps({
+                                "at": round(now, 1),
+                                "why": _why,
+                                "score": round(score, 4),
+                                "adjArea": round(adj_area, 4),
+                                "adjMean": round(adj_mean, 4),
+                                "idle": round(user_idle_sec(), 1),
+                                "quiet": round(quiet, 1),
+                                "gap": round(now - last_emit, 1),
+                            }, ensure_ascii=False) + "\n")
+                    except Exception:
+                        pass
                     if emit_change(picked, now, image) is not None:
                         last_emit = now
                         last_frame_t = newest
+                        if reading_due:
+                            read_said[0] = True   # 这一段静止说过了，别再隔 20 秒念一遍
             previous = current
         except Exception as exc:
             # 这里兜的是整轮采样（抓屏、判分、拼图、渲染都可能在里面）。

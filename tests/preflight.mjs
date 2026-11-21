@@ -153,3 +153,6 @@ await check('工具 schema 能被 dsh-tools 接受', async () => {
 
 console.log(failures.length === 0 ? '\n全部通过，重启后就会加载。' : `\n${failures.length} 项失败`);
 if (failures.length > 0) process.exitCode = 1;
+// 显式退出：插件模块会留下监听句柄，只设 exitCode 的话这脚本跑完不撒手，
+// 在 CI 里表现为永远挂住（本机也一样，得手动 Ctrl+C）。
+process.exit(failures.length === 0 ? 0 : 1);
