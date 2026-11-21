@@ -237,6 +237,32 @@ def foreground_title():
         return ""
 
 
+# 「只盯窗口」里填的窗口名很可能是个悬浮播放器（画中画、PotPlayer…）或浏览器，
+# 不是某一部番的名字。这类窗口通常飘在别的程序上面，用户一边画图一边看，
+# 前台永远是画图那边——旧逻辑「前台标题必须含窗口名」于是每六秒空转一次。
+# 这两个判据只回答「这个名字像不像播放器」，不碰抓图路径。
+_WINDOW_PLAYER_HINTS = (
+    "画中画", "pip", "播放器", "player", "potplayer", "vlc", "mpv", "mpc-hc",
+    "mozilla firefox", "firefox", "chrome", "edge", "browser", "浏览器",
+)
+
+
+def _is_player_like(window_name):
+    """窗口名像不像悬浮播放器/画中画/浏览器（而不是某一部番的名字）。"""
+    text = str(window_name or "").strip().lower()
+    if text == "":
+        return False
+    return any(hint in text for hint in _WINDOW_PLAYER_HINTS)
+
+
+def _media_foreground(fg_title):
+    """前台是不是也在放视频（浏览器/播放器）。空标题当不是。"""
+    text = str(fg_title or "").strip().lower()
+    if text == "":
+        return False
+    return any(hint in text for hint in _WINDOW_PLAYER_HINTS)
+
+
 # 游戏资料库：包内 games-all.json（预置几百条）+ 用户目录 learned-games.json（补的）。
 GAME_DB = {}
 # 游戏黑话 + 基础规则：games-notes.json（按游戏名索引）。
@@ -1232,8 +1258,23 @@ def grab_for_state():
         if fg.strip() == "余光":
             fg = ""
         if match not in fg.lower():
-            # 前台不是那个窗口：不抓、不唤醒，也不留旧画面去拼
-            return _miss("foreground-mismatch")
+            # 前台不是那个窗口，但窗口名是个悬浮播放器（画中画/浏览器/播放器名）：
+            # 那是常驻在其他程序上的一小块，前台永远是她在干活的程序。
+            # 这时去抓「那个窗口」自己的后台画面（PrintWindow），而不是抓前台——
+            # 抓前台就等于把画图软件的界面当成番剧剧情讲。
+            if _is_player_like(match):
+                hwnd, _wt = find_window_hwnd(match)
+                if hwnd:
+                    direct = grab_window_direct(hwnd)
+                    if direct is not None and not _black(direct):
+                        return direct
+                # 找不到那个窗口、或者它此刻拍不到：只有前台本身也在放视频时才退回通用路径，
+                # 否则宁可不抓（不讲话好过讲错画面）
+                if not _media_foreground(fg):
+                    return _miss("player-window-not-found")
+            else:
+                # 填的是具体的番名/站点名：前台不是它就不抓、不唤醒，也不留旧画面去拼
+                return _miss("foreground-mismatch")
     # 视频模式匹配上了就走下面「没指定窗口」那条通用路径：前台窗口矩形优先，退回整屏。
     # 不按「只盯窗口」那条走 PrintWindow——看片时窗口是浏览器，取后台窗口没意义。
     if STATE["windowOnly"] and STATE["mode"] != "video":
