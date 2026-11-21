@@ -13,7 +13,7 @@
 移植自 [dsh-see-now](https://github.com/SAOS-3624/dsh-see-now)（Apache-2.0），
 抓屏、变化判分、拼图的基本思路来自它。作者：SAOS-3624。
 
-Apache-2.0 要求保留本 NOTICE；MIT 部分见 LICENSE。移植时按本项目需要做了改写，
+Apache-2.0 第 4 条要求再分发时保留上游 NOTICE 的署名内容并标注修改；本项目 MIT 部分见 LICENSE。移植时按本项目需要做了改写，
 但源头思路的署名不删。
 
 ## B 站登录
