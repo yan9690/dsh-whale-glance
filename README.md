@@ -292,10 +292,12 @@
 
 ## 十三、许可与署名
 
-本插件 MIT。
+本插件整体按 MIT 发布；其中从 `dsh-see-now` 移植的抓屏/判分部分按 **Apache-2.0** 保留，
+全文见 `LICENSE-APACHE`，文件和改动清单见 `NOTICE`。
 
 - **fork 自** [pairun325/dsh-whale-sense](https://github.com/pairun325/dsh-whale-sense)（MIT）。
-- **抓屏与判分**移植自 [SAOS-3624/dsh-see-now](https://github.com/SAOS-3624/dsh-see-now)（Apache-2.0）。
+- **抓屏与判分**移植自 [SAOS-3624/dsh-see-now](https://github.com/SAOS-3624/dsh-see-now)（Apache-2.0，
+  随包附带 `LICENSE-APACHE`，按 Apache-2.0 §4 保留上游署名并标注修改）。
 - **B 站登录**参照 [Yuuyuko-uu/dsh-bili-subagent](https://github.com/Yuuyuko-uu/dsh-bili-subagent)（MIT，作者 Yuuyuko-uu）。
 - **小黑盒登录**参照 [fbbDirge/dsh-xiaoheihe](https://github.com/fbbDirge/dsh-xiaoheihe)（MIT，作者 fbbDirge）。
 - **美术素材**（鲸鱼娘头像）是社区二创，来源链和许可见 `CREDITS.md`。

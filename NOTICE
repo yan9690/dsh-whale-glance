@@ -8,13 +8,45 @@
 （MIT，Copyright 2026 dsh-tentacle contributors）。最初的游戏识别、字幕窗、弹幕那套
 来自它，之后在本项目上改名、大改。原作者署名保留。
 
-## 抓屏与判分逻辑
+## 抓屏与判分逻辑（Apache-2.0 部分）
 
-移植自 [dsh-see-now](https://github.com/SAOS-3624/dsh-see-now)（Apache-2.0），
-抓屏、变化判分、拼图的基本思路来自它。作者：SAOS-3624。
+本插件包含移植自 [SAOS-3624/dsh-see-now](https://github.com/SAOS-3624/dsh-see-now) 的代码
+（2026-11-07 取的是它的 0.2.0），该部分按 Apache License 2.0 授权，全文见随包附带的 `LICENSE-APACHE`。
+上游版权声明原文：
 
-Apache-2.0 第 4 条要求再分发时保留上游 NOTICE 的署名内容并标注修改；本项目 MIT 部分见 LICENSE。移植时按本项目需要做了改写，
-但源头思路的署名不删。
+    Copyright 2026 SAOS-3624
+
+    Licensed under the Apache License, Version 2.0 (the "License");
+    you may not use this file except in compliance with the License.
+    You may obtain a copy of the License at
+
+        http://www.apache.org/licenses/LICENSE-2.0
+
+    Unless required by applicable law or agreed to in writing, software
+    distributed under the License is distributed on an "AS IS" BASIS,
+    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+    See the License for the specific language governing permissions and
+    limitations under the License.
+
+**哪些是 Apache-2.0 部分**
+
+- `helper/sense.py`：亮度归一与黑边补偿（`normalize_score`、`row_window`，以及常量
+  `REF_V` / `GAIN_MAX` / `V_FLOOR` / `NOISE_FLOOR` / `BAR_MEAN` / `BAR_MAX` / `BAR_CAP` / `BAR_WINDOW`）
+  移植自上游 `src/cuts.js` 的 `brightnessGain` / `normalizeScore` / `barRows` / `barFraction`。
+- 抓屏、变化判分、把多帧拼一张图这套**思路**同样出自它（本项目的实现自己写过一遍）。
+
+**改了什么（Apache-2.0 §4(b) 要求标注修改）**
+
+- 由 JavaScript 改写为 Python：逐行亮度统计改用 `numpy`（上游用 `Float32Array` 累加）。
+- 加了一道保护：窗口里出现不同行宽时只保留与最新帧同长度的行
+  （视频线缩略图 320×180 与游戏线整屏宽度会混进同一个滚动窗口，直接 `np.asarray` 会抛）。
+- 接进本插件自己的 `STATE["normalize"]` 开关和 0–1 分数刻度（上游是 0–255 绝对分）。
+- 黑边判定合并进 `row_window()`，跟亮度增益一起算，没有单独保留 `barRows` 的公开接口。
+
+**传递链**：上游 `src/cuts.js` 自己注明该套算法（`REF_V` / `barFraction` / `normalizeScores`）
+参考自 `dsh-video-storyboard/src/storyboard/scan.js`。本插件只按看得到的上游源码写，没有直接取用那个项目。
+
+其余部分（游戏识别、字幕窗、弹幕、面板、B 站/小黑盒登录、配音）按 MIT 发布，全文见 `LICENSE`。
 
 ## B 站登录
 
