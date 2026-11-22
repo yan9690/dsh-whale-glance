@@ -18,6 +18,8 @@ const handlers = new Map();
 const agents = [];
 const followups = [];
 
+const effects = [];
+
 const ctx = {
   tools: {
     register(definition) {
@@ -38,6 +40,30 @@ const ctx = {
   on(event, handler) {
     handlers.set(event, handler);
     return () => handlers.delete(event);
+  },
+  // 插件现在用 ctx.effect(() => () => 清理) 注册清理（cordis 只认这个），
+  // 桩里原来没有，apply 到那儿就 TypeError——这两个测试因此一直没跑起来过。
+  effect(factory) {
+    const disposer = typeof factory === 'function' ? factory() : undefined;
+    effects.push(disposer);
+    return () => { if (typeof disposer === 'function') disposer(); };
+  },
+  get() { return undefined; },
+  // 现在叫醒走的是「直调模型」（ctx.llm），不再借子代理；桩里给了个假模型，
+  // 不然 react 一路抛，测试只能验到截屏那一层。
+  llm: {
+    async prepareCall() {
+      return {
+        config: {},
+        async *stream() {
+          yield { type: 'text-delta', text: '看到了：画面换了一栋楼，那个绿框还在。' };
+          yield { type: 'finish', finishReason: 'stop' };
+        },
+      };
+    },
+  },
+  attachments: {
+    async saveImage({ name }) { return { kind: 'image', path: name }; },
   },
   logger: { warn: (message) => console.warn('[warn]', message), info: () => {} },
 };
@@ -116,17 +142,27 @@ try {
   const look = await call('POST', '/whale-glance/look', {});
   const body = look.json();
   check('看我一眼返回 ok', look.statusCode === 200 && body.ok === true && body.woke === true, look.body);
-  check('真的 followup 了一次', followups.length === 1);
-  const message = followups[0] ?? {};
-  const text = message?.content?.[0]?.text ?? '';
-  check('消息是 user 角色', message.role === 'user');
-  check('来源是 producer-owned 的插件 kind', message.source?.kind === 'plugin:dsh-whale-glance');
-  check('消息带着截图路径', text.includes(String(body.path ?? '???')));
-  check('消息要求只出字幕', text.includes('speak=false'));
+
+  // 契约变了：说完不再 followup 回主会话（那会把主线整个叫醒、把钱吐回去），
+  // 结论落在字幕文件 + chat-history + last-react.json 三处。老断言查的是 followup，早就过期。
+  const hudPath = path.join(tempHome, 'storages', 'subtitle.txt');
+  const hudText = fs.existsSync(hudPath) ? fs.readFileSync(hudPath, 'utf8') : '';
+  check('字幕文件写了这一句', hudText.includes('看到了'), hudText.slice(0, 60));
+  const histPath = path.join(tempHome, 'storages', 'whale-glance', 'chat-history.txt');
+  const histText = fs.existsSync(histPath) ? fs.readFileSync(histPath, 'utf8') : '';
+  check('留档里有这一句', histText.includes('看到了'), histText.slice(0, 60));
+  let lastReact = null;
+  try {
+    lastReact = JSON.parse(fs.readFileSync(path.join(tempHome, 'storages', 'whale-glance', 'last-react.json'), 'utf8'));
+  } catch { /* 没写出就是没有 */ }
+  check('last-react.json 记了这一句', String(lastReact?.said ?? '').includes('看到了'));
+  check('没有去叫醒主会话（省钱的约定）', followups.length === 0, `${followups.length} 次`);
 
   const noAgent = await call('POST', '/whale-glance/snap', {});
   check('snap 路由能用', noAgent.statusCode === 200 && noAgent.json().ok === true);
 } finally {
-  dispose?.();
-  fs.rmSync(tempHome, { recursive: true, force: true });
+  try { dispose?.(); } catch { /* 关不干净也别让测试卡着 */ }
+  await new Promise((r) => setTimeout(r, 800));
+  try { fs.rmSync(tempHome, { recursive: true, force: true }); } catch { /* 帮工还没退干净 */ }
+  process.exit(process.exitCode ?? 0);
 }

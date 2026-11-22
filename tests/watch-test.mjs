@@ -17,6 +17,8 @@ const tools = new Map();
 const followups = [];
 const handlers = new Map();
 
+const effects = [];
+
 const ctx = {
   tools: {
     register(definition) {
@@ -29,6 +31,29 @@ const ctx = {
   on(event, handler) {
     handlers.set(event, handler);
     return () => handlers.delete(event);
+  },
+  // 插件现在用 ctx.effect(() => () => 清理) 注册清理（cordis 只认这个），
+  // 桩里原来没有，apply 到那儿就 TypeError——这两个测试因此一直没跑起来过。
+  effect(factory) {
+    const disposer = typeof factory === 'function' ? factory() : undefined;
+    effects.push(disposer);
+    return () => { if (typeof disposer === 'function') disposer(); };
+  },
+  get() { return undefined; },
+  // 叫醒走直调模型了，桩里给个假模型；不给的话 react 第一步就抛。
+  llm: {
+    async prepareCall() {
+      return {
+        config: {},
+        async *stream() {
+          yield { type: 'text-delta', text: '看到了：屏幕忽然亮成一片绿。' };
+          yield { type: 'finish', finishReason: 'stop' };
+        },
+      };
+    },
+  },
+  attachments: {
+    async saveImage({ name }) { return { kind: 'image', path: name }; },
   },
   logger: { warn: () => {}, info: () => {} },
 };
@@ -72,31 +97,41 @@ try {
 
   openWindow();
 
+  // 契约变了：说完不再 followup 回主会话（那会把主线整个叫醒），
+  // 结果落在字幕文件 + recentReactions 计数上。老断言查 followup，早过期。
+  const countNow = async () => Number((await tools.get('sense_state').execute({}, {})).recentReactions ?? 0);
+
   const deadline = Date.now() + 25000;
-  while (Date.now() < deadline && followups.length === 0) {
+  let spoke = 0;
+  while (Date.now() < deadline) {
+    spoke = await countNow();
+    if (spoke > 0) break;
     await new Promise((resolve) => setTimeout(resolve, 300));
   }
+  check('自动陪看真的叫人了', spoke > 0, `${spoke} 次`);
 
-  check('自动陪看真的叫人了', followups.length > 0, `${followups.length} 次`);
-  const text = followups[0]?.content?.[0]?.text ?? '';
-  check('消息里带截图路径', /frame-\d+\.jpg/.test(text), text.slice(0, 80));
-  const match = /截图：(.+\.jpg)/.exec(text);
-  check('截图文件存在', match !== null && fs.existsSync(match[1]), match?.[1]);
+  const hudPath = path.join(tempHome, 'storages', 'subtitle.txt');
+  const hudText = fs.existsSync(hudPath) ? fs.readFileSync(hudPath, 'utf8') : '';
+  check('画面变化说出了话', hudText.includes('看到了'), hudText.slice(0, 60));
 
   const state = await tools.get('sense_state').execute({}, {});
-  check('计数加一', state.recentReactions >= 1, String(state.recentReactions));
   check('记下的是 change 事件', state.lastEvent?.event === 'change', JSON.stringify(state.lastEvent?.score));
 
   // 只盯指定窗口：匹配不上时，画面再变也不该开口
   await tools.get('sense_config').execute({ windowMatch: 'zzz-根本没有这个窗口', cooldownMs: 5000 }, {});
-  const before = followups.length;
+  const before = await countNow();
   openWindow();
   const quietDeadline = Date.now() + 12000;
-  while (Date.now() < quietDeadline && followups.length === before) {
+  let after = before;
+  while (Date.now() < quietDeadline) {
+    after = await countNow();
+    if (after !== before) break;
     await new Promise((resolve) => setTimeout(resolve, 400));
   }
-  check('窗口不匹配就不说话', followups.length === before, `多说了 ${followups.length - before} 次`);
+  check('窗口不匹配就不说话', after === before, `多说了 ${after - before} 次`);
 } finally {
-  dispose?.();
-  fs.rmSync(tempHome, { recursive: true, force: true });
+  try { dispose?.(); } catch { /* 关不干净也别卡着 */ }
+  await new Promise((r) => setTimeout(r, 800));
+  try { fs.rmSync(tempHome, { recursive: true, force: true }); } catch { /* 帮工还没退干净 */ }
+  process.exit(process.exitCode ?? 0);
 }
