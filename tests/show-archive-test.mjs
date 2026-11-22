@@ -249,6 +249,25 @@ check('抛异常时这一段也进了排队', ctx.loadArchiveQueue().length === 
 check('日志记下了这次没成（带模型报错原文）', ctx.logs.some(([, t]) => /show-archive-empty/.test(t) && /模型连不上/.test(t)), ctx.logs.map(([, t]) => t.slice(0, 50)).join(' | ') || '没日志');
 check('抛异常时不写档案', ctx.disk === '', '');
 
+// ---------- 十点五、补写两次都空手：用原话自己拼一条，不能还丢 ----------
+reset();
+ctx.answers = ['', '', '', '', '', ''];
+ctx.defaultAnswer = '';
+await ctx.archiveSegment({
+  lines: herLines.map((text) => ({ text })), subtitles: [], title,
+  ...seg('2026-11-22T16:10:00+08:00', '2026-11-22T16:30:00+08:00'),
+});
+check('先排上队（tries=0）', ctx.loadArchiveQueue().length === 1 && ctx.loadArchiveQueue()[0].tries === 0, JSON.stringify(ctx.loadArchiveQueue().map((x) => x.tries)));
+await ctx.drainArchiveQueue(1);
+check('补写一次仍空手时，这条还在队列里（不算试过就丢）', ctx.loadArchiveQueue().length === 1 && ctx.loadArchiveQueue()[0].tries === 1, JSON.stringify(ctx.loadArchiveQueue().map((x) => x.tries)));
+await ctx.drainArchiveQueue(1);
+const s10 = JSON.parse(ctx.disk || '{}');
+const e10 = s10['可塑性记忆']?.剧情 ?? [];
+check('试到第二次还空手，就用手上的原话拼一条落档', e10.length === 1 && /原话留档/.test(e10[0]), e10[0] ?? '空');
+check('拼出来的条目里带着它说过的话', /捧着/.test(e10[0] ?? ''), (e10[0] ?? '').slice(0, 60));
+check('落档以后队列清空', ctx.loadArchiveQueue().length === 0, `queue=${ctx.loadArchiveQueue().length}`);
+check('日志记了 show-archive-giveup', ctx.logs.some(([, t]) => /show-archive-giveup/.test(t)), '');
+
 // ---------- 十一、番名解析的底子没坏 ----------
 check('「可塑性记忆」解析成不带集数', JSON.stringify(ctx.parseShowLabel('可塑性记忆')) === JSON.stringify({ series: '可塑性记忆', episode: null, season: null }), JSON.stringify(ctx.parseShowLabel('可塑性记忆')));
 check('「咒术回战 第3集」解析出集数 3', ctx.parseShowLabel('咒术回战 第3集')?.episode === 3, JSON.stringify(ctx.parseShowLabel('咒术回战 第3集')));
