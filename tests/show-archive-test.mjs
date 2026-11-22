@@ -210,9 +210,10 @@ await ctx.archiveSegment({
   ...seg('2026-11-22T14:37:25+08:00', '2026-11-22T14:50:30+08:00'),
 });
 const s7 = JSON.parse(ctx.disk || '{}');
-check('空正文会关思考重试一次再落盘', ctx.calls.length === 2 && ctx.written.length === 1, `calls=${ctx.calls.length} written=${ctx.written.length}`);
-check('重试那次用的是 off 档', ctx.calls[1]?.effort === 'off', String(ctx.calls[1]?.effort));
-check('重试拿到的收束进了档案', /关思考以后写出来的收束/.test(s7['可塑性记忆']?.剧情?.[0] ?? ''), s7['可塑性记忆']?.剧情?.[0] ?? '');
+check('空正文会换档重试一次再落盘', ctx.calls.length === 2 && ctx.written.length === 1, `calls=${ctx.calls.length} written=${ctx.written.length}`);
+check('第一档先走 off（看画面那条路天天在用的），属于稳的那一档', ctx.calls[0]?.effort === 'off', String(ctx.calls[0]?.effort));
+check('off 空手才上 low 要更细的收束', ctx.calls[1]?.effort === 'low', String(ctx.calls[1]?.effort));
+check('第二档拿到的收束进了档案', /关思考以后写出来的收束/.test(s7['可塑性记忆']?.剧情?.[0] ?? ''), s7['可塑性记忆']?.剧情?.[0] ?? '');
 
 // ---------- 八、两档都空：不丢，排队 ----------
 reset();
