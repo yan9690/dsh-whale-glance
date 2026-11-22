@@ -184,13 +184,22 @@ if (QUICK) {
   }
   problems.length ? fail('版本一致', problems.join('；')) : pass('版本一致', `package.json / README / 市场说明 都是 ${version}`);
 
+  // 这一项原来的判法是「线上版本 == 本地版本就是错」，等于把「刚发完、工作树干净」也判成错。
+  // 现在分三种：版本更高=可发；相等看有没有攒着没发的改动；更低=落后，那才是真错。
+  const dirtyNow = (run('git', ['status', '--porcelain']).out || '').trim() !== '';
+  const aheadR = run('git', ['rev-list', '--count', 'origin/main..HEAD']);
+  const aheadN = aheadR.ok ? Number(aheadR.out) || 0 : 0;
+  const unreleased = dirtyNow || aheadN > 0;
   for (const registry of ['https://registry.npmjs.org/', 'https://registry.npmmirror.com/']) {
     const r = run('npm', ['view', pkg.name, 'version', '--registry', registry]);
     const latest = (r.out || '').split('\n').filter(Boolean).slice(-1)[0] || '';
     if (!r.ok) { warn('registry', `${registry} 查不到：${r.out.split('\n')[0].slice(0, 60)}`); continue; }
     const cmp = compareVersion(version, latest);
-    if (cmp > 0) pass('registry', `${registry.replace('https://', '')} 线上 ${latest}，本地 ${version}（可发）`);
-    else fail('registry', `${registry.replace('https://', '')} 线上已是 ${latest}，本地 ${version} 没升版本`);
+    const host = registry.replace('https://', '');
+    if (cmp > 0) pass('registry', `${host} 线上 ${latest}，本地 ${version}（可发）`);
+    else if (cmp < 0) fail('registry', `${host} 线上已是 ${latest}，本地 ${version} 落后了`);
+    else if (unreleased) warn('registry', `${host} 线上已经发过 ${version}；本地又攒了改动（${dirtyNow ? '工作树没提交干净' : `${aheadN} 个提交没推`}），下次发版要升版本号`);
+    else pass('registry', `${host} 线上就是 ${version}（已发布，工作树干净）`);
   }
 }
 
