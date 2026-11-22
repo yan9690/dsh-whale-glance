@@ -90,7 +90,7 @@ const ctx = {
 vm.createContext(ctx);
 const code = [
   'loadArchiveQueue', 'saveArchiveQueue', 'enqueueArchive', 'drainArchiveQueue',
-  'parseShowLabel', 'pickEpisodeForArchive', 'episodeNoFromTitle', 'hhmm', 'dayhhmm',
+  'parseShowLabel', 'pickEpisodeForArchive', 'episodeNoFromTitle', 'localStamp', 'hhmm', 'dayhhmm',
   'archiveSegment',
 ].map(extract).join('\n');
 // 模块级的那几个 let 也带上，不然抠出来的函数引用不到
