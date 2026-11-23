@@ -24,6 +24,9 @@ const ctx = {
   HUD: 'C:/tmp/subtitle.txt',
   STORAGE: 'C:/tmp/storage',
   HUD_NOTES: new Set(['还在，先不吵。']),
+  // 「最近说过什么」现在按窗口存在进程内的 Map 里（chat-history 只留档）
+  SAID_BY_WINDOW: new Map(),
+  SAID_WINDOWS_CAP: 12,
   path: { join: (...parts) => parts.join('/') },
   fs: {
     writeFileSync: (p, t) => { ctx.writes.push([p, t]); },
@@ -35,7 +38,7 @@ const ctx = {
 import vm from 'node:vm';
 vm.createContext(ctx);
 vm.runInContext(
-  `${extract('writeHud')}\n${extract('recentSaidLines')}\nthis.writeHud = writeHud; this.recentSaidLines = recentSaidLines;`,
+  `${extract('writeHud')}\n${extract('rememberSaid')}\n${extract('recentSaidLines')}\nthis.writeHud = writeHud; this.rememberSaid = rememberSaid; this.recentSaidLines = recentSaidLines;`,
   ctx,
 );
 
@@ -73,23 +76,31 @@ ctx.writeHud(null);
 ctx.writeHud(undefined);
 check('空内容一个字节都不写', ctx.writes.length === 0, JSON.stringify(ctx.writes));
 
-// 五、读回最近五句走聊天记录，剥掉时间戳、排掉宿主提示语
-ctx.history = [
-  '[13:57:20] 第一句',
-  '[13:58:10] 还在，先不吵。',
-  '[13:59:01] 第二句',
-  '[13:59:50] 第三句',
-  '[14:00:47] 第四句',
-  '[14:01:36] 第五句',
-  '[14:02:27] 第六句',
-  '',
-].join('\n');
-const recent = ctx.recentSaidLines(5);
-check('取最后五句', recent.length === 5, JSON.stringify(recent));
-check('最后一句是第六句', recent[4] === '第六句', JSON.stringify(recent));
-check('时间戳被剥掉', recent.every((l) => !/^\[\d/.test(l)), JSON.stringify(recent));
-check('宿主提示语被排掉', !recent.includes('还在，先不吵。'), JSON.stringify(recent));
-check('读不到就返回空数组', (() => { ctx.history = ''; return ctx.recentSaidLines(5).length === 0; })());
+// 五、读回最近几句按窗口分开：换窗口就是新的一局，上一场的话不许压着这一场
+ctx.rememberSaid('A 游戏', '第一句');
+ctx.rememberSaid('A 游戏', '还在，先不吵。');
+ctx.rememberSaid('A 游戏', '第二句');
+ctx.rememberSaid('A 游戏', '第三句');
+check('取最后两句', JSON.stringify(ctx.recentSaidLines(2, 'A 游戏')) === '["第二句","第三句"]', JSON.stringify(ctx.recentSaidLines(2, 'A 游戏')));
+check('宿主提示语被排掉', !ctx.recentSaidLines(5, 'A 游戏').includes('还在，先不吵。'), JSON.stringify(ctx.recentSaidLines(5, 'A 游戏')));
+check('别的窗口还没有记忆', ctx.recentSaidLines(5, 'B 番剧').length === 0, JSON.stringify(ctx.recentSaidLines(5, 'B 番剧')));
+ctx.rememberSaid('B 番剧', '番里第一句');
+check('换窗口只看到这个窗口那句', JSON.stringify(ctx.recentSaidLines(5, 'B 番剧')) === '["番里第一句"]', JSON.stringify(ctx.recentSaidLines(5, 'B 番剧')));
+check('原窗口不受影响', JSON.stringify(ctx.recentSaidLines(2, 'A 游戏')) === '["第二句","第三句"]', JSON.stringify(ctx.recentSaidLines(2, 'A 游戏')));
+check('同一个键只留最近十条', (() => {
+  for (let i = 0; i < 20; i += 1) ctx.rememberSaid('C', 'c' + i);
+  const arr = ctx.recentSaidLines(99, 'C');
+  return arr.length === 10 && arr[arr.length - 1] === 'c19';
+})());
+check('空标题、空白话都不记', (() => {
+  ctx.rememberSaid('', 'x');
+  ctx.rememberSaid('D', '   ');
+  return ctx.recentSaidLines(5, '').length === 0 && ctx.recentSaidLines(5, 'D').length === 0;
+})());
+check('窗口开太多只留最近 12 个', (() => {
+  for (let i = 0; i < 20; i += 1) ctx.rememberSaid('W' + i, 'w' + i);
+  return ctx.SAID_BY_WINDOW.size === ctx.SAID_WINDOWS_CAP;
+})());
 
 // 六、调用处确实只用这个函数，没留旧分支
 check('调用处是 writeHud(said)', src.includes('writeHud(said);'), '');

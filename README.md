@@ -1,6 +1,6 @@
 # 余光（dsh-whale-glance）
 
-当前版本 v1.0.7 · Windows · MIT
+当前版本 v1.0.8 · Windows · MIT AND Apache-2.0
 
 > 自用插件，开源出来分享。它在我这台机器上跑得顺，别处的兼容和售后我没法保证，这点写在文末「最后」。
 
@@ -292,8 +292,11 @@
 
 ## 十三、许可与署名
 
-本插件整体按 MIT 发布；其中从 `dsh-see-now` 移植的抓屏/判分部分按 **Apache-2.0** 保留，
-全文见 `LICENSE-APACHE`，文件和改动清单见 `NOTICE`。
+本插件不是单一许可：主程序（插件框架、字幕窗、弹幕、语音、会话投递这些）是 **MIT**；
+从 `dsh-see-now` 移植的抓屏与判分部分是 **Apache-2.0**。两套代码一起装在这个包里，
+所以 `package.json` 的 `license` 字段写的是 SPDX 的 `MIT AND Apache-2.0`——意思是用的时候
+两份许可都得遵守，不是二选一。两份全文都在包里：`LICENSE`、`LICENSE-APACHE`；
+哪些文件属于哪一部分、改动清单见 `NOTICE`。
 
 - **fork 自** [pairun325/dsh-whale-sense](https://github.com/pairun325/dsh-whale-sense)（MIT）。
 - **抓屏与判分**移植自 [SAOS-3624/dsh-see-now](https://github.com/SAOS-3624/dsh-see-now)（Apache-2.0，
