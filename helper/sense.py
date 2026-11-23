@@ -2246,7 +2246,7 @@ def emit_change(frames, now, full=None):
     drawn = sheet_frames if len(sheet_frames) > 0 else shown[-1:]
     base = shown[0]["t"]
     mode = STATE["mode"]
-    title = foreground_title()
+    title = str(STATE.get("_lastTitle") or "").strip() or foreground_title()
     # 视频模式不做游戏识别：前台是浏览器，硬拿游戏关键词/黑话去套，全是对不上的空话
     if mode == "video":
         game, pace, info = "", "", None
